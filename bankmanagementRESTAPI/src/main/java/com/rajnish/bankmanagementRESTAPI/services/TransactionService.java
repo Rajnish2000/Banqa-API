@@ -19,9 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import javax.management.InvalidAttributeValueException;
-import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -33,120 +31,126 @@ public class TransactionService {
     private final CustomerRepository customerRepository;
 
     @Transactional
-    public TransactionResponseDTO withdrawOrDepositMoney(TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
+    public TransactionResponseDTO withdrawOrDepositMoney(TransactionRequestDTO request) throws InvalidAttributeValueException {
+        validateAmount(request.getTransaction_amount());
+
+        User user = currentUser();
+        Customer customer = customerRepository.findCustomerByUserId(user.getId())
+                .orElseThrow(() -> new NoSuchElementException("No customer profile exists for this user."));
+
+        Account account = accountRepository.findByAccountNumber(request.getAccountNum())
+                .orElseThrow(() -> new NoSuchElementException("Account not found."));
+        if (account.getCustomer() == null || !account.getCustomer().getCid().equals(customer.getCid())) {
+            throw new SecurityException("You can only transact from your own account.");
+        }
+        ensureAccountCanTransact(account);
+
         Transaction transaction;
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        Customer customer = customerRepository.findCustomerByUserId(user.getId()).orElseThrow(() -> new NoSuchElementException("No customer found for the user."));
-        List<Account> availableAccounts = customer.getAccountId();
+        double amount = request.getTransaction_amount();
 
-        boolean exists = availableAccounts.stream()
-                .anyMatch(account -> Objects.equals(
-                        account.getAccountNumber(),
-                        transactionRequestDTO.getAccountNum()
-                ));
-
-        if (!exists) {
-            throw new NoSuchElementException("Money can be withdraw or deposit from your Account number not others.");
+        if (request.getTransactionType() == TransactionType.DEPOSIT) {
+            if (amount >= 1_000_000) {
+                throw new IllegalArgumentException("A single deposit must be less than 1,000,000.");
+            }
+            account.setBalance(safeBalance(account) + amount);
+            transaction = buildTransaction(request, account.getAccountNumber(), null, TransactionNature.CR);
+        } else if (request.getTransactionType() == TransactionType.WITHDRAWAL) {
+            if (safeBalance(account) < amount) {
+                throw new IllegalArgumentException("Insufficient balance in account.");
+            }
+            account.setBalance(safeBalance(account) - amount);
+            transaction = buildTransaction(request, account.getAccountNumber(), null, TransactionNature.DR);
+        } else {
+            throw new InvalidAttributeValueException("Transaction type must be DEPOSIT or WITHDRAWAL.");
         }
 
-        if(transactionRequestDTO.getTransactionType() == TransactionType.DEPOSIT){
-            if(transactionRequestDTO.getTransaction_amount() < 1000000) {
-                transaction =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.CR)
-                        .build());
-                Account account = accountRepository.findByAccountNumber(transactionRequestDTO.getAccountNum()).orElse(null);
-                if(account != null) {
-                    account.setBalance(transaction.getTransaction_amount());
-                    accountRepository.save(account);
-                }else{
-                    throw new NoSuchElementException("Account Number Not Found. Invalid Account Number.");
-                }
-            }else{
-                throw new IllegalArgumentException("Amount is too high can not deposit. Amount must be less than 1000000");
-            }
-        } else if (transactionRequestDTO.getTransactionType() == TransactionType.WITHDRAWAL) {
-            Account account = accountRepository.findByAccountNumber(transactionRequestDTO.getAccountNum()).orElse(null);
-            if(account != null) {
-                if(account.getBalance() > transactionRequestDTO.getTransaction_amount()){
-                     transaction =  transactionRepository.save(Transaction.builder()
-                            .accountNum(transactionRequestDTO.getAccountNum())
-                            .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                            .transactionType(transactionRequestDTO.getTransactionType())
-                            .transactionMode(transactionRequestDTO.getTransactionMode())
-                            .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                            .transactionStatus(TransactionStatus.COMPLETED)
-                            .crdr(TransactionNature.DR)
-                            .build());
-                    account.setBalance(account.getBalance() - transaction.getTransaction_amount());
-                    accountRepository.save(account);
-                }else{
-                    throw new IndexOutOfBoundsException("Insufficient balance in account.");
-                }
-            }else{
-                throw new NoSuchElementException("Account Number Not Found. Invalid Account Number.");
-            }
-        }else {
-            throw new InvalidAttributeValueException("Invalid Transaction type");
-        }
-        return modelMapper.map(transaction,TransactionResponseDTO.class);
+        accountRepository.save(account);
+        transaction.setTransactionStatus(TransactionStatus.COMPLETED);
+        return modelMapper.map(transactionRepository.save(transaction), TransactionResponseDTO.class);
     }
 
     @Transactional
-    public TransactionResponseDTO transferMoney(TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        Customer customer = customerRepository.findCustomerByUserId(user.getId()).orElseThrow(() -> new NoSuchElementException("No customer found for the user."));
-        List<Account> availableAccounts = customer.getAccountId();
-
-        boolean exists = availableAccounts.stream()
-                .anyMatch(account -> Objects.equals(
-                        account.getAccountNumber(),
-                        transactionRequestDTO.getAccountNum()
-                ));
-
-        if (!exists) {
-            throw new NoSuchElementException("Money can be transfer from your Account number not others.");
+    public TransactionResponseDTO transferMoney(TransactionRequestDTO request) throws InvalidAttributeValueException {
+        validateAmount(request.getTransaction_amount());
+        if (request.getTransactionType() != TransactionType.TRANSFER) {
+            throw new InvalidAttributeValueException("Transaction type must be TRANSFER.");
         }
-        Transaction debit;
-        if(transactionRequestDTO.getTransactionType() == TransactionType.TRANSFER){
-            Account from_account = accountRepository.findByAccountNumber(transactionRequestDTO.getToAccountNum()).orElseThrow(() -> new NoSuchElementException("Sender Account not found"));
-            Account to_account = accountRepository.findByAccountNumber(transactionRequestDTO.getToAccountNum()).orElseThrow(() -> new NoSuchElementException("Receiver Account not found"));
-            if(from_account.getBalance() > transactionRequestDTO.getTransaction_amount()){
-                debit =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .toAccountNum(transactionRequestDTO.getToAccountNum())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.DR)
-                        .build());
-               Transaction credit =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getToAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .toAccountNum(transactionRequestDTO.getAccountNum())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.CR)
-                        .build());
-                from_account.setBalance(from_account.getBalance() - debit.getTransaction_amount());
-                accountRepository.save(from_account);
-                to_account.setBalance(to_account.getBalance() + credit.getTransaction_amount());
-                accountRepository.save(to_account);
-            }else{
-                throw new IndexOutOfBoundsException("Insufficient balance in account.");
-            }
-        }else{
-            throw new InvalidAttributeValueException("Invalid Transaction type");
+        if (request.getAccountNum() == null || request.getToAccountNum() == null
+                || request.getAccountNum().equals(request.getToAccountNum())) {
+            throw new IllegalArgumentException("A valid, different sender and receiver account are required.");
         }
-        return modelMapper.map(debit,TransactionResponseDTO.class);
+
+        User user = currentUser();
+        Customer customer = customerRepository.findCustomerByUserId(user.getId())
+                .orElseThrow(() -> new NoSuchElementException("No customer profile exists for this user."));
+
+        Account from = accountRepository.findByAccountNumber(request.getAccountNum())
+                .orElseThrow(() -> new NoSuchElementException("Sender account not found."));
+        Account to = accountRepository.findByAccountNumber(request.getToAccountNum())
+                .orElseThrow(() -> new NoSuchElementException("Receiver account not found."));
+
+        if (from.getCustomer() == null || !from.getCustomer().getCid().equals(customer.getCid())) {
+            throw new SecurityException("You can only transfer money from your own account.");
+        }
+        ensureAccountCanTransact(from);
+        ensureAccountCanTransact(to);
+
+        double amount = request.getTransaction_amount();
+        if (safeBalance(from) < amount) {
+            throw new IllegalArgumentException("Insufficient balance in sender account.");
+        }
+
+        from.setBalance(safeBalance(from) - amount);
+        to.setBalance(safeBalance(to) + amount);
+        accountRepository.save(from);
+        accountRepository.save(to);
+
+        Transaction debit = buildTransaction(request, from.getAccountNumber(), to.getAccountNumber(), TransactionNature.DR);
+        debit.setTransactionStatus(TransactionStatus.COMPLETED);
+        transactionRepository.save(debit);
+
+        Transaction credit = buildTransaction(request, to.getAccountNumber(), from.getAccountNumber(), TransactionNature.CR);
+        credit.setTransactionStatus(TransactionStatus.COMPLETED);
+        transactionRepository.save(credit);
+
+        return modelMapper.map(debit, TransactionResponseDTO.class);
+    }
+
+    private User currentUser() {
+        Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        if (!(principal instanceof User user)) {
+            throw new SecurityException("Authentication is required.");
+        }
+        return user;
+    }
+
+    private void validateAmount(Double amount) {
+        if (amount == null || !Double.isFinite(amount) || amount <= 0) {
+            throw new IllegalArgumentException("Transaction amount must be a positive, finite number.");
+        }
+    }
+
+    private double safeBalance(Account account) {
+        return account.getBalance() == null ? 0.0 : account.getBalance();
+    }
+
+    private void ensureAccountCanTransact(Account account) {
+        if (!Boolean.TRUE.equals(account.getVerified())) {
+            throw new IllegalArgumentException("Account must be verified before transacting.");
+        }
+    }
+
+    private Transaction buildTransaction(TransactionRequestDTO request, String accountNumber,
+                                         String otherAccountNumber, TransactionNature nature) {
+        return Transaction.builder()
+                .accountNum(accountNumber)
+                .toAccountNum(otherAccountNumber)
+                .transaction_amount(request.getTransaction_amount())
+                .transactionType(request.getTransactionType())
+                .transactionMode(request.getTransactionMode())
+                .transaction_remark(request.getTransaction_remark())
+                .transactionStatus(TransactionStatus.PENDING)
+                .crdr(nature)
+                .build();
     }
 }

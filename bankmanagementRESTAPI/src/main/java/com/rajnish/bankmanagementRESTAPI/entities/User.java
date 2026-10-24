@@ -11,7 +11,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 
-
 @Entity
 @Table(name = "register_users")
 @NoArgsConstructor
@@ -56,7 +55,12 @@ public class User implements UserDetails {
 
     @Override
     public String getUsername() {
-        return "";
+        return email;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return status == UserStatus.ACTIVE;
     }
 
     public enum UserRole {
@@ -69,5 +73,4 @@ public class User implements UserDetails {
         BLOCKED,
         INACTIVE
     }
-
 }
