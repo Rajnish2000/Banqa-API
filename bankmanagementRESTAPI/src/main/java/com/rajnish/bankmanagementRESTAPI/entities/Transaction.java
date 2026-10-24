@@ -35,16 +35,12 @@ public class Transaction {
     @Column(nullable = false)
     private TransactionType transactionType;
 
-//    @ManyToOne
-//    @JoinColumn(name = "main_account_id",nullable = false)
     private String accountNum;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TransactionMode transactionMode;
 
-//    @ManyToOne
-//    @JoinColumn(name = "receiving_account_id")
     private String toAccountNum;
 
     @Enumerated(EnumType.STRING)
@@ -59,35 +55,11 @@ public class Transaction {
 
     @AssertTrue(message = "Receiving account must be provided for transfer transactions")
     public boolean isReceivingAccountValid() {
-        if (TransactionType.TRANSFER.equals(this.transactionType)) {
-            return this.toAccountNum != null;
-        }
-        return true;
+        return !TransactionType.TRANSFER.equals(this.transactionType) || this.toAccountNum != null;
     }
 
-    @AssertTrue(message = "Sender must be DR and receiver must be CR for transfers")
+    @AssertTrue(message = "Transfer direction must be set explicitly")
     public boolean isCrDrConsistent() {
-        if (TransactionType.TRANSFER.equals(this.transactionType)) {
-            // Sender cannot be CR
-            return this.accountNum == null || this.crdr != TransactionNature.CR;
-        }
-        return true;
+        return !TransactionType.TRANSFER.equals(this.transactionType) || this.crdr != null;
     }
-
-    @PrePersist
-    private void setCrDrAutomatically() {
-        if (this.transactionType == TransactionType.DEPOSIT) {
-            this.crdr = TransactionNature.CR;
-        } else if (this.transactionType == TransactionType.WITHDRAWAL) {
-            this.crdr = TransactionNature.DR;
-        } else if (this.transactionType == TransactionType.TRANSFER) {
-            // If this is the sender, DR; if it's the receiver, CR
-            if (this.toAccountNum != null && this.accountNum != null) {
-                this.crdr = TransactionNature.DR; // sender
-            } else if (this.accountNum != null) {
-                this.crdr = TransactionNature.CR; // receiver
-            }
-        }
-    }
-
 }
