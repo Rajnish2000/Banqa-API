@@ -14,6 +14,8 @@ import org.modelmapper.ModelMapper;
 
 import java.time.LocalDate;
 import java.util.Optional;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +48,10 @@ class CustomerServiceTest {
 
         User user = new User();
         user.setId(userId);
+        user.setRole(User.UserRole.USER);
+        user.setEmailVerified(true);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities()));
 
         Customer savedCustomer = Customer.builder()
                 .user(user)
@@ -80,5 +86,6 @@ class CustomerServiceTest {
         verify(userRepository).findById(userId);
         verify(customerRepository).save(any(Customer.class));
         verify(modelMapper).map(savedCustomer, CustomerDto.class);
+        SecurityContextHolder.clearContext();
     }
 }

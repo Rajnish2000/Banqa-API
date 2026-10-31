@@ -5,8 +5,10 @@ import com.rajnish.bankmanagementRESTAPI.entities.type.AccountType;
 import com.rajnish.bankmanagementRESTAPI.entities.type.IdentityType;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.UuidGenerator;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 @Entity
 @Table(name = "account")
@@ -18,10 +20,11 @@ import java.util.List;
 public class Account {
     @Id
     @GeneratedValue
+    @UuidGenerator
     @Column(length = 36, updatable = false, nullable = false)
     private String aid;
 
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true, length = 24)
     private String accountNumber;
 
     @Column(nullable = false)
@@ -39,7 +42,8 @@ public class Account {
     private AccountType accountType = AccountType.SAVING;
 
     @Builder.Default
-    private Double balance = 0.0;
+    @Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal balance = BigDecimal.ZERO;
 
     @ManyToOne
     @JoinColumn(name = "customer_id", nullable = false)

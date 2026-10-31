@@ -1,12 +1,16 @@
 package com.rajnish.bankmanagementRESTAPI.utils;
 
 import java.security.SecureRandom;
-import java.util.Random;
+import java.util.Locale;
 
-public class GenerateOTP {
-    public static String generateOtp(){
-        Random rand = new Random();
-        int otp = 1000 + rand.nextInt(9000);
-        return Integer.toString(otp);
+public final class GenerateOTP {
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    private GenerateOTP() {
+    }
+
+    public static String generateOtp() {
+        return String.format(Locale.ROOT, "%06d", RANDOM.nextInt(1_000_000));
     }
 }

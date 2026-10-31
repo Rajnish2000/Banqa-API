@@ -4,6 +4,7 @@ import com.rajnish.bankmanagementRESTAPI.entities.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -13,14 +14,18 @@ import java.util.Date;
 
 @Component
 public class JwtUtil {
-    @Value("${jwt.SECRET}")
+    @Value("${jwt.secret}")
     private String SECRET;
 
+    @PostConstruct
+    void validateSecret() {
+        if (SECRET == null || SECRET.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException("JWT_SECRET must contain at least 32 bytes.");
+        }
+    }
+
     private SecretKey getSecretKey(String secretKey){
-//        System.out.println("secret: "+SECRET);
-        //It creates a cryptographic secret key from your plain string
-        return Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
-//        return Jwts.SIG.HS256.key().build();
+        return Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
     }
 
     public String generateToken(User user) {
@@ -38,11 +43,11 @@ public class JwtUtil {
     }
 
     public boolean isTokenValid(String token, String username) {
-        return username.equals(extractUsername(token)) && !isExpired(token);
-    }
-
-    private boolean isExpired(String token) {
-        return getClaims(token).getExpiration().before(new Date());
+        Claims claims = getClaims(token);
+        Date expiration = claims.getExpiration();
+        return username.equals(claims.getSubject())
+                && expiration != null
+                && expiration.after(new Date());
     }
 
     private Claims getClaims(String token) {

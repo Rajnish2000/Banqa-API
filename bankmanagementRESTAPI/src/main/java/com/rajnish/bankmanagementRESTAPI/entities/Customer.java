@@ -2,6 +2,7 @@ package com.rajnish.bankmanagementRESTAPI.entities;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.UuidGenerator;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.List;
 public class Customer {
     @Id
     @GeneratedValue
+    @UuidGenerator
     @Column(length = 36, updatable = false, nullable = false)
     private String cid;
 
@@ -28,7 +30,9 @@ public class Customer {
     private String address;
     private String gender;
     private LocalDate dob;
-    private Boolean kyc_status;
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean kyc_status = false;
 
     @OneToMany(mappedBy = "customer",cascade = CascadeType.ALL,orphanRemoval = true)
     private List<Account> accountId;

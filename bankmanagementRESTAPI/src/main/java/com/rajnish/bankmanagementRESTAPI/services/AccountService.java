@@ -6,63 +6,90 @@ import com.rajnish.bankmanagementRESTAPI.dtos.DeleteAccountDto;
 import com.rajnish.bankmanagementRESTAPI.dtos.VerifyRequestDto;
 import com.rajnish.bankmanagementRESTAPI.entities.Account;
 import com.rajnish.bankmanagementRESTAPI.entities.Customer;
-
+import com.rajnish.bankmanagementRESTAPI.entities.User;
+import com.rajnish.bankmanagementRESTAPI.entities.type.AccountStatus;
 import com.rajnish.bankmanagementRESTAPI.repositories.AccountRepository;
 import com.rajnish.bankmanagementRESTAPI.repositories.CustomerRepository;
-import com.rajnish.bankmanagementRESTAPI.repositories.UserRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.antlr.v4.runtime.InputMismatchException;
-import org.modelmapper.ModelMapper;
-import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import javax.management.InvalidAttributeValueException;
-import java.nio.InvalidMarkException;
+import java.math.BigDecimal;
 import java.security.SecureRandom;
+import java.util.NoSuchElementException;
 
 @Service
 @RequiredArgsConstructor
 public class AccountService {
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     private final AccountRepository accountRepository;
     private final CustomerRepository customerRepository;
-    private final ModelMapper modelMapper;
 
     public String generateAccountNumber() {
-        long timestamp = System.currentTimeMillis();
-        int randomNum = new SecureRandom().nextInt(999);
-        return timestamp + String.format("%03d", randomNum);
+        return Long.toString(100_000_000_000L + SECURE_RANDOM.nextLong(900_000_000_000L));
     }
 
-    public AccountResponse createAccount(Long id, AccountRequest accountRequest) {
-        Customer customer = customerRepository.findCustomerByUserId(id).orElse(null);
-        System.out.println("customer : "+customer);
-        String accountNum = generateAccountNumber();
-        Account account = accountRepository.findByAccountNumber(accountNum).orElse(null);
-        while(account != null){
-            accountNum = generateAccountNumber();
-            account = accountRepository.findByAccountNumber(accountNum).orElse(null);
+    @Transactional
+    public AccountResponse createAccount(Long userId, AccountRequest accountRequest) {
+        User authenticatedUser = currentUser();
+        if (!authenticatedUser.getId().equals(userId)
+                && authenticatedUser.getRole() != User.UserRole.ADMIN) {
+            throw new AccessDeniedException("You cannot create an account for another user.");
         }
-        account = accountRepository.save(Account.builder()
-                        .bankName(accountRequest.getBankName())
-                        .branch(accountRequest.getBranch())
-                        .identityType(accountRequest.getIdentityType())
-                        .identityNumber(accountRequest.getIdentityNumber())
-                        .branchCode(accountRequest.getBranchCode())
-                        .accountNumber(accountNum)
-                        .customer(customer)
-                        .build()
-                );
-        return modelMapper.map(account, AccountResponse.class);
+
+        Customer customer = customerRepository.findCustomerByUserId(userId)
+                .orElseThrow(() -> new NoSuchElementException("Customer profile not found."));
+        if (!Boolean.TRUE.equals(customer.getKyc_status())) {
+            throw new IllegalArgumentException("Customer KYC must be approved before opening an account.");
+        }
+        String accountNumber;
+        do {
+            accountNumber = generateAccountNumber();
+        } while (accountRepository.existsByAccountNumber(accountNumber));
+
+        Account account = Account.builder()
+                .bankName(accountRequest.getBankName())
+                .branch(accountRequest.getBranch())
+                .identityType(accountRequest.getIdentityType())
+                .identityNumber(accountRequest.getIdentityNumber())
+                .branchCode(accountRequest.getBranchCode())
+                .accountType(accountRequest.getAccountType())
+                .accountNumber(accountNumber)
+                .balance(BigDecimal.ZERO)
+                .customer(customer)
+                .build();
+        Account savedAccount = accountRepository.save(account);
+        return new AccountResponse(
+                savedAccount.getAccountNumber(),
+                savedAccount.getAccountType().name(),
+                savedAccount.getBranchCode(),
+                savedAccount.getAccountStatus().name(),
+                savedAccount.getBalance(),
+                savedAccount.getBankName(),
+                savedAccount.getBranch(),
+                savedAccount.getVerified(),
+                savedAccount.getIdentityType().name());
     }
 
-    public String verifyAccount(Long id, Long accountNumber, VerifyRequestDto verifyRequestDto) throws InvalidAttributeValueException {
-        String accNum = accountNumber.toString();
-        Account account = accountRepository.findByAccountNumber(accNum).orElseThrow(InvalidMarkException::new);
-        if(!account.getIdentityType().equals(verifyRequestDto.getIdentityType()) || !account.getIdentityNumber().equals(verifyRequestDto.getIdentityNumber())){
-            throw new InvalidAttributeValueException("Verification Failed. Invalid details passed.");
+    @Transactional
+    @PreAuthorize("hasRole('ADMIN')")
+    public String verifyAccount(Long accountNumber, VerifyRequestDto request)
+            throws InvalidAttributeValueException {
+        Account account = accountRepository.findByAccountNumber(accountNumber.toString())
+                .orElseThrow(() -> new NoSuchElementException("Account not found."));
+        if (account.getIdentityType() != request.getIdentityType()
+                || !account.getIdentityNumber().equals(request.getIdentityNumber())) {
+            throw new InvalidAttributeValueException("Verification failed. Identity details do not match.");
+        }
+        if (!Boolean.TRUE.equals(account.getCustomer().getKyc_status())) {
+            throw new IllegalArgumentException("Customer KYC must be approved before account verification.");
         }
         account.setVerified(true);
         accountRepository.save(account);
@@ -71,17 +98,28 @@ public class AccountService {
 
     @Transactional
     @PreAuthorize("hasRole('ADMIN')")
-    public DeleteAccountDto deleteAccount(Long accountNum) {
+    public DeleteAccountDto closeAccount(Long accountNum) {
         String accountNumber = accountNum.toString();
-        Account account = accountRepository.findByAccountNumber(accountNumber).orElseThrow(() -> new RuntimeException("Account not found"));
-        if(!account.getVerified()){
-            throw new IllegalArgumentException("Unverified account can not be deleted.");
+        Account account = accountRepository.findByAccountNumber(accountNumber)
+                .orElseThrow(() -> new NoSuchElementException("Account not found."));
+        if (account.getBalance().compareTo(BigDecimal.ZERO) != 0) {
+            throw new IllegalArgumentException("An account must have a zero balance before it can be closed.");
         }
-        Customer customer = account.getCustomer();
-        customer.getAccountId().remove(account);
-        accountRepository.delete(account);
-        accountRepository.flush();
-        System.out.println("account: "+account.getAccountNumber());
-        return new DeleteAccountDto(accountNumber,account.getCustomer().getUser().getName(),account.getBankName(),account.getBranch(),account.getBranchCode());
+        account.setAccountStatus(AccountStatus.INACTIVE);
+        accountRepository.save(account);
+        return new DeleteAccountDto(
+                accountNumber,
+                account.getCustomer().getUser().getName(),
+                account.getBankName(),
+                account.getBranch(),
+                account.getBranchCode());
+    }
+
+    private User currentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof User user)) {
+            throw new AccessDeniedException("Authentication is required.");
+        }
+        return user;
     }
 }

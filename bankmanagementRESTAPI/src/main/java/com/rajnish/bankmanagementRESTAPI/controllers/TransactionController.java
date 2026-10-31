@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,7 +32,7 @@ public class TransactionController {
             @ApiResponse(responseCode = "500", description = "Server Error")
     })
     @PostMapping("/withdraw_or_deposit_money")
-    public TransactionResponseDTO withdrawOrDepositMoney(@RequestBody TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
+    public TransactionResponseDTO withdrawOrDepositMoney(@Valid @RequestBody TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
         return transactionService.withdrawOrDepositMoney(transactionRequestDTO);
     }
 
@@ -43,7 +44,7 @@ public class TransactionController {
             @ApiResponse(responseCode = "400", description = "Bad Request"),
             @ApiResponse(responseCode = "500", description = "Server Error")
     })
-    public TransactionResponseDTO transferMoney(@RequestBody TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
+    public TransactionResponseDTO transferMoney(@Valid @RequestBody TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
         return transactionService.transferMoney(transactionRequestDTO);
     }
 }

@@ -6,6 +6,7 @@ import com.rajnish.bankmanagementRESTAPI.dtos.AccountResponse;
 import com.rajnish.bankmanagementRESTAPI.dtos.DeleteAccountDto;
 import com.rajnish.bankmanagementRESTAPI.dtos.VerifyRequestDto;
 import com.rajnish.bankmanagementRESTAPI.entities.type.IdentityType;
+import com.rajnish.bankmanagementRESTAPI.entities.type.AccountType;
 import com.rajnish.bankmanagementRESTAPI.services.AccountService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +56,7 @@ class AccountControllerTest {
         request.setIdentityType(IdentityType.AADHAR);
         request.setIdentityNumber("1234567890");
         request.setBranchCode("HDFC001");
+        request.setAccountType(AccountType.SAVING);
 
         AccountResponse response = new AccountResponse();
         response.setAccountNumber("12345678901");
@@ -65,7 +67,7 @@ class AccountControllerTest {
         mockMvc.perform(post("/account/1/create")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.accountNumber").value("12345678901"));
 
     }
@@ -76,8 +78,8 @@ class AccountControllerTest {
         verifyRequestDto.setIdentityType(IdentityType.AADHAR);
         verifyRequestDto.setIdentityNumber("1234567890");
 
-        when(accountService.verifyAccount(eq(1L), eq(12345432112345L), any(VerifyRequestDto.class))).thenReturn("Account verified successfully.");
-        mockMvc.perform(post("/account/1/12345432112345/verify_account")
+        when(accountService.verifyAccount(eq(12345432112345L), any(VerifyRequestDto.class))).thenReturn("Account verified successfully.");
+        mockMvc.perform(post("/account/12345432112345/verify_account")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(verifyRequestDto)))
                 .andExpect(status().isOk())
@@ -85,7 +87,7 @@ class AccountControllerTest {
     }
 
     @Test
-    void shouldAccountDeletedSuccessfully() throws Exception {
+    void shouldCloseZeroBalanceAccountSuccessfully() throws Exception {
 
         DeleteAccountDto response = new DeleteAccountDto();
         response.setAccountNumber("12345");
@@ -94,7 +96,7 @@ class AccountControllerTest {
         response.setBranch("Mumbai");
         response.setBranchCode("HDFC001");
 
-        when(accountService.deleteAccount(eq(1L)))
+        when(accountService.closeAccount(eq(1L)))
                 .thenReturn(response);
 
         mockMvc.perform(delete("/account/1/delete_account")

@@ -3,150 +3,187 @@ package com.rajnish.bankmanagementRESTAPI.services;
 import com.rajnish.bankmanagementRESTAPI.dtos.TransactionRequestDTO;
 import com.rajnish.bankmanagementRESTAPI.dtos.TransactionResponseDTO;
 import com.rajnish.bankmanagementRESTAPI.entities.Account;
-import com.rajnish.bankmanagementRESTAPI.entities.Customer;
 import com.rajnish.bankmanagementRESTAPI.entities.Transaction;
 import com.rajnish.bankmanagementRESTAPI.entities.User;
+import com.rajnish.bankmanagementRESTAPI.entities.type.AccountStatus;
 import com.rajnish.bankmanagementRESTAPI.entities.type.TransactionNature;
 import com.rajnish.bankmanagementRESTAPI.entities.type.TransactionStatus;
 import com.rajnish.bankmanagementRESTAPI.entities.type.TransactionType;
 import com.rajnish.bankmanagementRESTAPI.repositories.AccountRepository;
-import com.rajnish.bankmanagementRESTAPI.repositories.CustomerRepository;
 import com.rajnish.bankmanagementRESTAPI.repositories.TransactionRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.modelmapper.ModelMapper;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
-import javax.management.InvalidAttributeValueException;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.Objects;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class TransactionService {
 
+    private static final BigDecimal MAX_BALANCE =
+            new BigDecimal("99999999999999999.99");
+
     private final TransactionRepository transactionRepository;
-    private final ModelMapper modelMapper;
     private final AccountRepository accountRepository;
-    private final CustomerRepository customerRepository;
 
     @Transactional
-    public TransactionResponseDTO withdrawOrDepositMoney(TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
-        Transaction transaction;
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        Customer customer = customerRepository.findCustomerByUserId(user.getId()).orElseThrow(() -> new NoSuchElementException("No customer found for the user."));
-        List<Account> availableAccounts = customer.getAccountId();
-
-        boolean exists = availableAccounts.stream()
-                .anyMatch(account -> Objects.equals(
-                        account.getAccountNumber(),
-                        transactionRequestDTO.getAccountNum()
-                ));
-
-        if (!exists) {
-            throw new NoSuchElementException("Money can be withdraw or deposit from your Account number not others.");
+    public TransactionResponseDTO withdrawOrDepositMoney(TransactionRequestDTO request) {
+        validateAmount(request.getTransaction_amount());
+        if (request.getTransactionType() != TransactionType.DEPOSIT
+                && request.getTransactionType() != TransactionType.WITHDRAWAL) {
+            throw new IllegalArgumentException("Only deposits and withdrawals are supported by this operation.");
         }
 
-        if(transactionRequestDTO.getTransactionType() == TransactionType.DEPOSIT){
-            if(transactionRequestDTO.getTransaction_amount() < 1000000) {
-                transaction =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.CR)
-                        .build());
-                Account account = accountRepository.findByAccountNumber(transactionRequestDTO.getAccountNum()).orElse(null);
-                if(account != null) {
-                    account.setBalance(transaction.getTransaction_amount());
-                    accountRepository.save(account);
-                }else{
-                    throw new NoSuchElementException("Account Number Not Found. Invalid Account Number.");
-                }
-            }else{
-                throw new IllegalArgumentException("Amount is too high can not deposit. Amount must be less than 1000000");
+        Account account = lockAccounts(request.getAccountNum()).get(request.getAccountNum());
+        requireOwner(account, currentUser());
+        requireUsableAccount(account);
+
+        BigDecimal amount = request.getTransaction_amount();
+        TransactionNature nature;
+        if (request.getTransactionType() == TransactionType.DEPOSIT) {
+            BigDecimal newBalance = account.getBalance().add(amount);
+            requireBalanceFits(newBalance);
+            account.setBalance(newBalance);
+            nature = TransactionNature.CR;
+        } else {
+            if (account.getBalance().compareTo(amount) < 0) {
+                throw new IllegalArgumentException("Insufficient balance in account.");
             }
-        } else if (transactionRequestDTO.getTransactionType() == TransactionType.WITHDRAWAL) {
-            Account account = accountRepository.findByAccountNumber(transactionRequestDTO.getAccountNum()).orElse(null);
-            if(account != null) {
-                if(account.getBalance() > transactionRequestDTO.getTransaction_amount()){
-                     transaction =  transactionRepository.save(Transaction.builder()
-                            .accountNum(transactionRequestDTO.getAccountNum())
-                            .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                            .transactionType(transactionRequestDTO.getTransactionType())
-                            .transactionMode(transactionRequestDTO.getTransactionMode())
-                            .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                            .transactionStatus(TransactionStatus.COMPLETED)
-                            .crdr(TransactionNature.DR)
-                            .build());
-                    account.setBalance(account.getBalance() - transaction.getTransaction_amount());
-                    accountRepository.save(account);
-                }else{
-                    throw new IndexOutOfBoundsException("Insufficient balance in account.");
-                }
-            }else{
-                throw new NoSuchElementException("Account Number Not Found. Invalid Account Number.");
-            }
-        }else {
-            throw new InvalidAttributeValueException("Invalid Transaction type");
+            account.setBalance(account.getBalance().subtract(amount));
+            nature = TransactionNature.DR;
         }
-        return modelMapper.map(transaction,TransactionResponseDTO.class);
+
+        accountRepository.save(account);
+        Transaction transaction = saveTransaction(
+                request, account.getAccountNumber(), null, nature, null);
+        return toResponse(transaction);
     }
 
     @Transactional
-    public TransactionResponseDTO transferMoney(TransactionRequestDTO transactionRequestDTO) throws InvalidAttributeValueException {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        Customer customer = customerRepository.findCustomerByUserId(user.getId()).orElseThrow(() -> new NoSuchElementException("No customer found for the user."));
-        List<Account> availableAccounts = customer.getAccountId();
-
-        boolean exists = availableAccounts.stream()
-                .anyMatch(account -> Objects.equals(
-                        account.getAccountNumber(),
-                        transactionRequestDTO.getAccountNum()
-                ));
-
-        if (!exists) {
-            throw new NoSuchElementException("Money can be transfer from your Account number not others.");
+    public TransactionResponseDTO transferMoney(TransactionRequestDTO request) {
+        validateAmount(request.getTransaction_amount());
+        if (request.getTransactionType() != TransactionType.TRANSFER) {
+            throw new IllegalArgumentException("Transaction type must be TRANSFER.");
         }
-        Transaction debit;
-        if(transactionRequestDTO.getTransactionType() == TransactionType.TRANSFER){
-            Account from_account = accountRepository.findByAccountNumber(transactionRequestDTO.getToAccountNum()).orElseThrow(() -> new NoSuchElementException("Sender Account not found"));
-            Account to_account = accountRepository.findByAccountNumber(transactionRequestDTO.getToAccountNum()).orElseThrow(() -> new NoSuchElementException("Receiver Account not found"));
-            if(from_account.getBalance() > transactionRequestDTO.getTransaction_amount()){
-                debit =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .toAccountNum(transactionRequestDTO.getToAccountNum())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.DR)
-                        .build());
-               Transaction credit =  transactionRepository.save(Transaction.builder()
-                        .accountNum(transactionRequestDTO.getToAccountNum())
-                        .transaction_amount(transactionRequestDTO.getTransaction_amount())
-                        .toAccountNum(transactionRequestDTO.getAccountNum())
-                        .transactionType(transactionRequestDTO.getTransactionType())
-                        .transactionMode(transactionRequestDTO.getTransactionMode())
-                        .transaction_remark(transactionRequestDTO.getTransaction_remark())
-                        .transactionStatus(TransactionStatus.COMPLETED)
-                        .crdr(TransactionNature.CR)
-                        .build());
-                from_account.setBalance(from_account.getBalance() - debit.getTransaction_amount());
-                accountRepository.save(from_account);
-                to_account.setBalance(to_account.getBalance() + credit.getTransaction_amount());
-                accountRepository.save(to_account);
-            }else{
-                throw new IndexOutOfBoundsException("Insufficient balance in account.");
+
+        String fromNumber = request.getAccountNum();
+        String toNumber = request.getToAccountNum();
+        if (toNumber == null || toNumber.isBlank()) {
+            throw new IllegalArgumentException("A destination account is required.");
+        }
+        if (fromNumber.equals(toNumber)) {
+            throw new IllegalArgumentException("Source and destination accounts must be different.");
+        }
+
+        Map<String, Account> accounts = lockAccounts(fromNumber, toNumber);
+        Account fromAccount = accounts.get(fromNumber);
+        Account toAccount = accounts.get(toNumber);
+        requireOwner(fromAccount, currentUser());
+        requireUsableAccount(fromAccount);
+        requireUsableAccount(toAccount);
+
+        BigDecimal amount = request.getTransaction_amount();
+        if (fromAccount.getBalance().compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient balance in account.");
+        }
+
+        BigDecimal receiverBalance = toAccount.getBalance().add(amount);
+        requireBalanceFits(receiverBalance);
+        fromAccount.setBalance(fromAccount.getBalance().subtract(amount));
+        toAccount.setBalance(receiverBalance);
+        accountRepository.saveAll(List.of(fromAccount, toAccount));
+
+        String transferReference = UUID.randomUUID().toString();
+        Transaction debit = saveTransaction(
+                request, fromNumber, toNumber, TransactionNature.DR, transferReference);
+        saveTransaction(request, toNumber, fromNumber, TransactionNature.CR, transferReference);
+        return toResponse(debit);
+    }
+
+    private Map<String, Account> lockAccounts(String... accountNumbers) {
+        List<Account> accounts = accountRepository.lockByAccountNumbers(List.of(accountNumbers));
+        Map<String, Account> byNumber = accounts.stream()
+                .collect(Collectors.toMap(Account::getAccountNumber, Function.identity()));
+        for (String accountNumber : accountNumbers) {
+            if (!byNumber.containsKey(accountNumber)) {
+                throw new NoSuchElementException("Account not found.");
             }
-        }else{
-            throw new InvalidAttributeValueException("Invalid Transaction type");
         }
-        return modelMapper.map(debit,TransactionResponseDTO.class);
+        return byNumber;
+    }
+
+    private void requireOwner(Account account, User user) {
+        if (!account.getCustomer().getUser().getId().equals(user.getId())) {
+            throw new SecurityException("You cannot transact from an account you do not own.");
+        }
+    }
+
+    private void requireUsableAccount(Account account) {
+        if (!Boolean.TRUE.equals(account.getVerified())
+                || account.getAccountStatus() != AccountStatus.ACTIVE) {
+            throw new IllegalArgumentException("Account must be verified and active.");
+        }
+    }
+
+    private User currentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof User user)) {
+            throw new SecurityException("Authentication is required.");
+        }
+        return user;
+    }
+
+    private Transaction saveTransaction(
+            TransactionRequestDTO request,
+            String accountNumber,
+            String counterpartyAccount,
+            TransactionNature nature,
+            String transferReference) {
+        Transaction transaction = Transaction.builder()
+                .accountNum(accountNumber)
+                .toAccountNum(counterpartyAccount)
+                .transaction_amount(request.getTransaction_amount())
+                .transactionType(request.getTransactionType())
+                .transactionMode(request.getTransactionMode())
+                .transaction_remark(request.getTransaction_remark())
+                .transactionStatus(TransactionStatus.COMPLETED)
+                .crdr(nature)
+                .transferReference(transferReference)
+                .build();
+        return transactionRepository.save(transaction);
+    }
+
+    private void validateAmount(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0 || amount.scale() > 2
+                || amount.precision() - amount.scale() > 17) {
+            throw new IllegalArgumentException("Amount must be positive and have at most two decimal places.");
+        }
+    }
+
+    private void requireBalanceFits(BigDecimal balance) {
+        if (balance.compareTo(MAX_BALANCE) > 0) {
+            throw new IllegalArgumentException("The resulting balance exceeds the supported account limit.");
+        }
+    }
+
+    private TransactionResponseDTO toResponse(Transaction transaction) {
+        return new TransactionResponseDTO(
+                transaction.getTid(),
+                transaction.getTransaction_amount(),
+                transaction.getTransactionType(),
+                transaction.getAccountNum(),
+                transaction.getToAccountNum(),
+                transaction.getTransaction_remark(),
+                transaction.getCrdr(),
+                transaction.getTransactionTime());
     }
 }

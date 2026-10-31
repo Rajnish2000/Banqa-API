@@ -6,8 +6,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 @Tag(name="Customer Handling API")
@@ -21,13 +23,19 @@ public class CustomerController {
     @Operation(
             description = "Add Customer Details API")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Success"),
+            @ApiResponse(responseCode = "201", description = "Success"),
             @ApiResponse(responseCode = "400", description = "Bad Request"),
             @ApiResponse(responseCode = "500", description = "Server Error")
     })
     @PostMapping("/{id}/add_customer_details")
-    public ResponseEntity<CustomerDto> addCustomerDetails(@PathVariable long id, @RequestBody CustomerDto customerDto){
-        return ResponseEntity.ok(customerService.addCustomerDetails(id,customerDto));
+    public ResponseEntity<CustomerDto> addCustomerDetails(@PathVariable long id, @Valid @RequestBody CustomerDto customerDto){
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(customerService.addCustomerDetails(id,customerDto));
+    }
+
+    @PostMapping("/{customerId}/approve-kyc")
+    public ResponseEntity<CustomerDto> approveKyc(@PathVariable String customerId) {
+        return ResponseEntity.ok(customerService.approveKyc(customerId));
     }
 
 }

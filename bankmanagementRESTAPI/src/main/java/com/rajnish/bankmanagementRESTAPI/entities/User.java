@@ -47,6 +47,10 @@ public class User implements UserDetails {
     @Builder.Default
     private UserStatus status = UserStatus.ACTIVE;
 
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private boolean emailVerified = false;
+
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         return new HashSet<>(Collections.singletonList(
@@ -56,7 +60,7 @@ public class User implements UserDetails {
 
     @Override
     public String getUsername() {
-        return "";
+        return email;
     }
 
     public enum UserRole {
@@ -70,4 +74,23 @@ public class User implements UserDetails {
         INACTIVE
     }
 
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return status == UserStatus.ACTIVE;
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return status == UserStatus.ACTIVE;
+    }
 }

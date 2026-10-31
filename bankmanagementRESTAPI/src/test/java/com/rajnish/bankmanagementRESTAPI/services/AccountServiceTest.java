@@ -6,6 +6,7 @@ import com.rajnish.bankmanagementRESTAPI.dtos.DeleteAccountDto;
 import com.rajnish.bankmanagementRESTAPI.entities.Account;
 import com.rajnish.bankmanagementRESTAPI.entities.Customer;
 import com.rajnish.bankmanagementRESTAPI.entities.User;
+import com.rajnish.bankmanagementRESTAPI.entities.type.AccountType;
 import com.rajnish.bankmanagementRESTAPI.entities.type.IdentityType;
 import com.rajnish.bankmanagementRESTAPI.repositories.AccountRepository;
 import com.rajnish.bankmanagementRESTAPI.repositories.CustomerRepository;
@@ -14,10 +15,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.modelmapper.ModelMapper;
 
 import java.util.ArrayList;
 import java.util.Optional;
+import java.math.BigDecimal;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,18 +34,17 @@ class AccountServiceTest {
     private AccountRepository accountRepository;
     @Mock
     private CustomerRepository customerRepository;
-    @Mock
-    private ModelMapper modelMapper;
-
     @InjectMocks
     private AccountService accountService;
 
     @Test
     void shouldCreateAccountNumberSuccessfully(){
         Long userId = 1L;
+        User owner = User.builder().id(userId).role(User.UserRole.USER).build();
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(owner, null, owner.getAuthorities()));
         AccountRequest accountRequest = new AccountRequest();
-        accountRequest.setAccountType("SAVING");
-        accountRequest.setVerified(false);
+        accountRequest.setAccountType(AccountType.SAVING);
         accountRequest.setBranch("SBI2333");
         accountRequest.setBankName("State Bank of India");
         accountRequest.setBranchCode("SBI232");
@@ -52,6 +54,7 @@ class AccountServiceTest {
         String accountNum = "2342352234234";
         Customer customer = new Customer();
         customer.setCid("23fsd-2323423-234");
+        customer.setKyc_status(true);
 
         Account savedAccount = Account.builder()
                 .bankName(accountRequest.getBankName())
@@ -65,16 +68,14 @@ class AccountServiceTest {
 
         AccountResponse accountResponse = new AccountResponse();
         accountResponse.setAccountNumber(accountNum);
-        accountResponse.setAccountType(accountRequest.getAccountType());
+        accountResponse.setAccountType(accountRequest.getAccountType().name());
         accountResponse.setAccountStatus("ACTIVE");
         accountResponse.setBankName(accountRequest.getBankName());
 
         // this part called Mock behavior
         when(customerRepository.findCustomerByUserId(userId)).thenReturn(Optional.of(customer));
-        when(accountRepository.findByAccountNumber(anyString())).thenReturn(Optional.empty());
+        when(accountRepository.existsByAccountNumber(anyString())).thenReturn(false);
         when(accountRepository.save(any(Account.class))).thenReturn(savedAccount);
-        when(modelMapper.map(savedAccount,AccountResponse.class)).thenReturn(accountResponse);
-
         // this part is Act
         AccountResponse result = accountService.createAccount(userId, accountRequest);
 
@@ -86,13 +87,12 @@ class AccountServiceTest {
 
         // this part is Verify
         verify(customerRepository).findCustomerByUserId(userId);
-        verify(accountRepository).findByAccountNumber(anyString());
+        verify(accountRepository).existsByAccountNumber(anyString());
         verify(accountRepository).save(any(Account.class));
-        verify(modelMapper).map(savedAccount,AccountResponse.class);
     }
 
     @Test
-    void shouldAccountDeletedSuccessfully(){
+    void shouldCloseZeroBalanceAccountSuccessfully(){
 
         Long accountNum = 323423423423L;
         String accountNumber = accountNum.toString();
@@ -107,6 +107,7 @@ class AccountServiceTest {
         Account account = new Account();
         account.setAccountNumber(accountNumber);
         account.setVerified(true);
+        account.setBalance(BigDecimal.ZERO);
         account.setCustomer(customer);
         account.setBankName("HDFC");
         account.setBranch("Mumbai");
@@ -116,14 +117,16 @@ class AccountServiceTest {
 
         when(accountRepository.findByAccountNumber(accountNumber)).thenReturn(Optional.of(account));
 
-        DeleteAccountDto result = accountService.deleteAccount(accountNum);
+        DeleteAccountDto result = accountService.closeAccount(accountNum);
 
         assertNotNull(result);
         assertEquals(accountNumber,result.getAccountNumber());
         assertEquals(account.getCustomer().getUser().getName(),result.getCustomerName());
+        assertEquals(com.rajnish.bankmanagementRESTAPI.entities.type.AccountStatus.INACTIVE,
+                account.getAccountStatus());
 
         verify(accountRepository).findByAccountNumber(accountNumber);
-        verify(accountRepository).flush();
+        verify(accountRepository).save(account);
 
     }
 

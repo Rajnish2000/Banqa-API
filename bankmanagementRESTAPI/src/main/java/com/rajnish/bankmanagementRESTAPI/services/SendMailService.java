@@ -1,64 +1,92 @@
 package com.rajnish.bankmanagementRESTAPI.services;
 
 import com.rajnish.bankmanagementRESTAPI.utils.GenerateOTP;
+import com.rajnish.bankmanagementRESTAPI.entities.User;
+import com.rajnish.bankmanagementRESTAPI.repositories.UserRepository;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.CachePut;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
-@Slf4j
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Duration;
+import java.util.Locale;
+
 @Service
 @RequiredArgsConstructor
 public class SendMailService {
 
-    private final JavaMailSender mailSender;
-    @Autowired
-    private StringRedisTemplate stringRedisTemplate;
+    private static final Duration OTP_TTL = Duration.ofMinutes(5);
+    private static final Duration RESEND_COOLDOWN = Duration.ofSeconds(60);
+    private static final long MAX_VERIFICATION_ATTEMPTS = 5;
 
-    @CachePut(value = "otp", key = "#toEmail")
-    public String sendOtpEmail(String toEmail) throws Exception {
-        System.out.println("email: "+toEmail);
+    private final JavaMailSender mailSender;
+    private final StringRedisTemplate redis;
+    private final UserRepository userRepository;
+
+    public void sendOtpEmail(String toEmail) throws Exception {
+        String email = toEmail.trim().toLowerCase(Locale.ROOT);
+        String cooldownKey = "otp:cooldown:" + email;
+        Boolean acquired = redis.opsForValue().setIfAbsent(cooldownKey, "1", RESEND_COOLDOWN);
+        if (!Boolean.TRUE.equals(acquired)) {
+            throw new IllegalArgumentException("An OTP was recently sent. Wait before requesting another.");
+        }
+
         String otp = GenerateOTP.generateOtp();
-        System.out.println("otp: "+otp);
-//        SimpleMailMessage message = new SimpleMailMessage();
-//        message.setTo(toEmail);
-//        message.setSubject("Your OTP Code verify your account");
-//        message.setText("Your OTP is: " + otp + "\nIt will expire in 5 minutes.");
-//        mailSender.send(message);
-        MimeMessage message = mailSender.createMimeMessage();
-        MimeMessageHelper helper = new MimeMessageHelper(message, true);
-        helper.setTo(toEmail);
-        helper.setSubject("Your OTP Code");
-        String htmlContent =
-                "<div style='font-family: Arial, sans-serif; padding: 20px;'>"
-                        + "<h2 style='color: #2c3e50;'>🔐 OTP Verification</h2>"
-                        + "<p>Dear User,</p>"
-                        + "<p>Your One-Time Password (OTP) is:</p>"
-                        + "<h1 style='color: #27ae60;'>" + otp + "</h1>"
-                        + "<p>This OTP is valid for <b>5 minutes</b>.</p>"
-                        + "<p style='color: red;'><b>Do not share this OTP with anyone.</b></p>"
-                        + "<br>"
-                        + "<p>If you did not request this, please ignore this email.</p>"
-                        + "<p>Regards,<br><b>Banking Management Team</b></p>"
-                        + "</div>";
-        helper.setText(htmlContent, true);
-        mailSender.send(message);
-        return otp;
+        String otpKey = otpKey(email);
+        redis.opsForValue().set(otpKey, otp, OTP_TTL);
+        redis.delete("otp:attempts:" + email);
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true);
+            helper.setTo(email);
+            helper.setSubject("Your OTP Code");
+            helper.setText(
+                    "<p>Your one-time verification code is:</p><h1>" + otp
+                            + "</h1><p>This code expires in five minutes. Do not share it.</p>",
+                    true);
+            mailSender.send(message);
+        } catch (Exception exception) {
+            redis.delete(otpKey);
+            redis.delete(cooldownKey);
+            throw exception;
+        }
     }
 
-    @CacheEvict(value = "otp",key = "#toEmail")
-    public boolean verifyOYP(String toEmail, String inOtp) {
-        String key = "otp::"+toEmail;
-        String otpOut = stringRedisTemplate.opsForValue().get(key);
-        //one of the another approach.
-        //Object otpOut = redisTemplate.opsForValue().get(key).toString();
-        System.out.println("otpOut: "+otpOut);
-        return inOtp.equals(otpOut);
+    public boolean verifyOtp(String email, String inputOtp) {
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
+        String otpKey = otpKey(normalizedEmail);
+        Long attempts = redis.opsForValue().increment("otp:attempts:" + normalizedEmail);
+        if (Long.valueOf(1).equals(attempts)) {
+            redis.expire("otp:attempts:" + normalizedEmail, OTP_TTL);
+        }
+        if (attempts == null || attempts > MAX_VERIFICATION_ATTEMPTS) {
+            redis.delete(otpKey);
+            return false;
+        }
+
+        String storedOtp = redis.opsForValue().get(otpKey);
+        if (storedOtp == null || inputOtp == null) {
+            return false;
+        }
+        boolean matches = MessageDigest.isEqual(
+                storedOtp.getBytes(StandardCharsets.UTF_8),
+                inputOtp.getBytes(StandardCharsets.UTF_8));
+        if (matches) {
+            redis.delete(otpKey);
+            redis.delete("otp:attempts:" + normalizedEmail);
+            User user = userRepository.findByEmailIgnoreCase(normalizedEmail)
+                    .orElseThrow(() -> new IllegalArgumentException("User not found."));
+            user.setEmailVerified(true);
+            userRepository.save(user);
+        }
+        return matches;
+    }
+
+    private String otpKey(String email) {
+        return "otp:code:" + email;
     }
 }

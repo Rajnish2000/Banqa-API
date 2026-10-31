@@ -5,6 +5,7 @@ import com.rajnish.bankmanagementRESTAPI.dtos.AuthResponse;
 import com.rajnish.bankmanagementRESTAPI.dtos.RegisterRequest;
 import com.rajnish.bankmanagementRESTAPI.dtos.RegisterResponse;
 import com.rajnish.bankmanagementRESTAPI.services.AuthService;
+import jakarta.validation.Valid;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -34,7 +35,7 @@ public class AuthController {
             @ApiResponse(responseCode = "400", description = "Bad Request"),
             @ApiResponse(responseCode = "500", description = "Server Error")
     })
-    public ResponseEntity<AuthResponse> login(@RequestBody AuthRequest requestData) {
+    public ResponseEntity<AuthResponse> login(@Valid @RequestBody AuthRequest requestData) {
         return ResponseEntity.ok(authService.login(requestData));
     }
     @Operation(
@@ -45,7 +46,7 @@ public class AuthController {
             @ApiResponse(responseCode = "500", description = "Server Error")
     })
     @PostMapping("/register")
-    public ResponseEntity<RegisterResponse> registerUser(@RequestBody RegisterRequest registerRequest){
-        return ResponseEntity.ok(authService.registerUser(registerRequest));
+    public ResponseEntity<RegisterResponse> registerUser(@Valid @RequestBody RegisterRequest registerRequest){
+        return ResponseEntity.status(201).body(authService.registerUser(registerRequest));
     }
 }

@@ -33,22 +33,12 @@ public class OpenApiConfig {
                                         .scheme("bearer")
                                         .bearerFormat("JWT")
                         )
-                );
-    }
-
-    @Bean
-    public OpenAPI baseOpenAPI(){
-        return new OpenAPI()
-                .components(new Components()
                         .addResponses("successfulResponse",
-                                new ApiResponse().description("Request successful")
-                        )
+                                new ApiResponse().description("Request successful"))
                         .addResponses("badRequest",
-                                new ApiResponse().description("Bad request")
-                        )
+                                new ApiResponse().description("Bad request"))
                         .addResponses("internalServerError",
-                                new ApiResponse().description("Internal server error")
-                        )
+                                new ApiResponse().description("Internal server error"))
                 );
     }
 }
